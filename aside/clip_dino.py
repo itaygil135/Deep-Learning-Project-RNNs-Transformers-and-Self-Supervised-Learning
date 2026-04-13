@@ -25,9 +25,7 @@ def get_similarity_no_loop(text_features, image_features):
     ############################################################################
     # TODO: Compute the cosine similarity. Do NOT use for loops.               #
     ############################################################################
-    text_norm = text_features / text_features.norm(dim=1, keepdim=True)
-    image_norm = image_features / image_features.norm(dim=1, keepdim=True)
-    similarity = text_norm @ image_norm.T
+
     ############################################################################
     #                             END OF YOUR CODE                             #
     ############################################################################
@@ -57,40 +55,25 @@ def clip_zero_shot_classifier(clip_model, clip_preprocess, images,
         List[str]: Predicted class label for each image, selected from the
             given class_texts.
     """
-
+    
     pred_classes = []
 
     ############################################################################
     # TODO: Find the class labels for images.                                  #
     ############################################################################
 
-    # Preprocess and encode images
-    preprocessed_images = torch.stack(
-        [clip_preprocess(Image.fromarray(img)).to(device) for img in images])
-    image_features = clip_model.encode_image(preprocessed_images)
-    image_features = image_features / image_features.norm(dim=1, keepdim=True)
-    # Tokenize and encode class texts
-    text_tokens = clip.tokenize(class_texts).to(device)
-    text_features = clip_model.encode_text(text_tokens)
-    text_features = text_features / text_features.norm(dim=1, keepdim=True)
-    # Compute similarity
-    similarity = get_similarity_no_loop(text_features, image_features)
-    # Get predicted classes
-    top_indices = similarity.argmax(dim=0)
-    pred_classes = [class_texts[idx] for idx in top_indices.cpu().numpy()]
-
     ############################################################################
     #                             END OF YOUR CODE                             #
     ############################################################################
 
     return pred_classes
-
+  
 
 class CLIPImageRetriever:
     """
     A simple image retrieval system using CLIP.
     """
-
+    
     @torch.no_grad()
     def __init__(self, clip_model, clip_preprocess, images, device):
         """
@@ -106,20 +89,12 @@ class CLIPImageRetriever:
         # computation for each text query. You may end up NOT using the above      #
         # similarity function for most compute-optimal implementation.#
         ############################################################################
-        self.clip_model = clip_model
-        self.clip_preprocess = clip_preprocess
-        self.device = device
-        # Preprocess and encode images
-        preprocessed_images = torch.stack(
-            [self.clip_preprocess(Image.fromarray(img)).to(device) for img in images])
-        self.image_features = self.clip_model.encode_image(preprocessed_images)
-        self.image_features = self.image_features / self.image_features.norm(dim=1, keepdim=True)
 
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
-
-
+        pass
+    
     @torch.no_grad()
     def retrieve(self, query: str, k: int = 2):
         """
@@ -138,60 +113,49 @@ class CLIPImageRetriever:
         # TODO: Retrieve the indices of top-k images.                              #
         ############################################################################
 
-        # Tokenize and encode query text
-        text_tokens = clip.tokenize([query]).to(self.device)
-        text_features = self.clip_model.encode_text(text_tokens)
-        text_features = text_features / text_features.norm(dim=1, keepdim=True)
-        # Compute similarity
-        similarity = get_similarity_no_loop(text_features, self.image_features)
-        # Get top-k indices 
-        topk_values, topk_indices = similarity.topk(k=k, dim=1)
-        top_indices = topk_indices[0].cpu().numpy().tolist()
-
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
         return top_indices
 
-
+  
 class DavisDataset:
     def __init__(self):
-        self.davis = tfds.load(
-            'davis/480p', split='validation', as_supervised=False)
+        self.davis = tfds.load('davis/480p', split='validation', as_supervised=False)
         self.img_tsfm = T.Compose([
             T.Resize((480, 480)), T.ToTensor(),
-            T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+            T.Normalize((0.485,0.456,0.406), (0.229,0.224,0.225)),
         ])
-
+        
+      
     def get_sample(self, index):
         assert index < len(self.davis)
         ds_iter = iter(tfds.as_numpy(self.davis))
         for i in range(index+1):
             video = next(ds_iter)
         frames, masks = video['video']['frames'], video['video']['segmentations']
-        print(
-            f"video {video['metadata']['video_name'].decode()}  {len(frames)} frames")
+        print(f"video {video['metadata']['video_name'].decode()}  {len(frames)} frames")
         return frames, masks
-
+    
     def process_frames(self, frames, dino_model, device):
         res = []
         for f in frames:
             f = self.img_tsfm(Image.fromarray(f))[None].to(device)
             with torch.no_grad():
-                tok = dino_model.get_intermediate_layers(f, n=1)[0]
+              tok = dino_model.get_intermediate_layers(f, n=1)[0]
             res.append(tok[0, 1:])
 
         res = torch.stack(res)
         return res
-
+    
     def process_masks(self, masks, device):
         res = []
         for m in masks:
-            m = cv2.resize(m, (60, 60), cv2.INTER_NEAREST)
+            m = cv2.resize(m, (60,60), cv2.INTER_NEAREST)
             res.append(torch.from_numpy(m).long().flatten(-2, -1))
         res = torch.stack(res).to(device)
         return res
-
+    
     def mask_frame_overlay(self, processed_mask, frame):
         H, W = frame.shape[:2]
         mask = processed_mask.detach().cpu().numpy()
@@ -200,6 +164,7 @@ class DavisDataset:
             mask.astype(np.uint8), (W, H), interpolation=cv2.INTER_NEAREST)
         overlay = create_segmentation_overlay(mask, frame.copy())
         return overlay
+        
 
 
 def create_segmentation_overlay(segmentation_mask, image, alpha=0.5):
@@ -214,8 +179,7 @@ def create_segmentation_overlay(segmentation_mask, image, alpha=0.5):
     Returns:
         np.ndarray: Image with segmentation overlay (shape: (H, W, 3), dtype: uint8).
     """
-    assert segmentation_mask.shape[:2] == image.shape[:
-                                                      2], "Segmentation and image size mismatch"
+    assert segmentation_mask.shape[:2] == image.shape[:2], "Segmentation and image size mismatch"
     assert image.dtype == np.uint8, "Image must be of type uint8"
 
     # Generate deterministic colors for each class using a fixed colormap
@@ -246,7 +210,7 @@ def compute_iou(pred, gt, num_classes):
 
 
 class DINOSegmentation:
-    def __init__(self, device, num_classes: int, inp_dim: int = 384):
+    def __init__(self, device, num_classes: int, inp_dim : int = 384):
         """
         Initialize the DINOSegmentation model.
 
@@ -265,16 +229,6 @@ class DINOSegmentation:
         # function to train classify each DINO feature vector into a seg. class.   #
         # It can be a linear layer or two layer neural network.                    #
         ############################################################################
-        self.device = device
-        self.num_classes = num_classes
-        # 2d linear layer
-        self.model = nn.Sequential(
-            nn.Linear(inp_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, num_classes)
-        ).to(device)
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
-        self.criterion = nn.CrossEntropyLoss()
 
         ############################################################################
         #                             END OF YOUR CODE                             #
@@ -292,21 +246,12 @@ class DINOSegmentation:
         ############################################################################
         # TODO: Train your model for `num_iters` steps.                            #
         ############################################################################
-        self.model.train()
-        for it in range(num_iters):
-            self.optimizer.zero_grad()
-            outputs = self.model(X_train)
-            loss = self.criterion(outputs, Y_train)
-            loss.backward()
-            self.optimizer.step()
-            if (it + 1) % 100 == 0:
-                print(f"Iteration {it+1}/{num_iters}, Loss: {loss.item():.4f}")
 
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
         pass
-
+    
     @torch.no_grad()
     def inference(self, X_test):
         """Perform inference on the given test DINO feature vectors.
@@ -321,10 +266,9 @@ class DINOSegmentation:
         ############################################################################
         # TODO: Train your model for `num_iters` steps.                            #
         ############################################################################
-        self.model.eval()
-        outputs = self.model(X_test)
-        _, pred_classes = torch.max(outputs, dim=1) 
+
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
         return pred_classes
+
